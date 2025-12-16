@@ -42,7 +42,7 @@ export default function DashboardPage() {
     priority: filters.priority !== 'all' ? filters.priority as 'high' | 'medium' | 'low' : undefined,
     category: filters.category !== 'all' ? filters.category : undefined,
     tag_ids: filters.tag !== 'all' && tags ? tags.filter(t => t.name === filters.tag).map(t => t.id) : undefined,
-    sort_by: filters.sortBy === 'created' ? 'created_at' as const : filters.sortBy === 'due' ? 'due_date' as const : filters.sortBy as 'priority' | 'title',
+    sort_by: (filters.sortBy as string) === 'created' ? 'created_at' as const : (filters.sortBy as string) === 'due' ? 'due_date' as const : filters.sortBy as 'priority' | 'title',
     sort_order: filters.sortOrder as 'asc' | 'desc',
   }
 
@@ -137,12 +137,14 @@ export default function DashboardPage() {
     { key: 'n', action: handleCreateTask, description: 'Create new task' },
     { key: 't', action: () => setShowTagManager(true), description: 'Manage tags' },
     { key: '?', shift: true, action: () => setShowShortcuts(!showShortcuts), description: 'Show shortcuts' },
-    { key: 'd', ctrl: true, action: () => {}, description: 'Toggle dark mode (handled by ThemeToggle)' },
-    { key: 'Escape', action: () => {
-      if (showShortcuts) setShowShortcuts(false)
-      if (showTagManager) setShowTagManager(false)
-      if (isTaskModalOpen) setIsTaskModalOpen(false)
-    }, description: 'Close modal' },
+    { key: 'd', ctrl: true, action: () => { }, description: 'Toggle dark mode (handled by ThemeToggle)' },
+    {
+      key: 'Escape', action: () => {
+        if (showShortcuts) setShowShortcuts(false)
+        if (showTagManager) setShowTagManager(false)
+        if (isTaskModalOpen) setIsTaskModalOpen(false)
+      }, description: 'Close modal'
+    },
   ], true)
 
   if (authLoading || !user) {
