@@ -1,12 +1,15 @@
 import axios from "axios";
 
 const getBaseUrl = () => {
-  let url = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-  // Auto-upgrade to HTTPS in production to prevent mixed content errors
-  if (process.env.NODE_ENV === "production" && url.startsWith("http://")) {
-    url = url.replace("http://", "https://");
+  if (process.env.NODE_ENV === "production") {
+    const envUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (envUrl && !envUrl.includes("localhost")) {
+      return envUrl.replace("http://", "https://").replace(/\/$/, "");
+    }
+    // Hardcoded fallback for immediate fix if Env Var is missing/wrong
+    return "https://syedahafsa58-todo-phase2.hf.space";
   }
-  return url;
+  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 };
 
 const api = axios.create({
