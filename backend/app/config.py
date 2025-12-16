@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from functools import lru_cache
 
 
@@ -16,6 +17,16 @@ class Settings(BaseSettings):
 
     # Environment
     environment: str = "development"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def clean_database_url(cls, v: str):
+        if v:
+            v = v.strip()
+            # Fix scheme for SQLAlchemy
+            if v.startswith("postgres://"):
+                v = v.replace("postgres://", "postgresql://", 1)
+        return v
 
     class Config:
         env_file = ".env"
