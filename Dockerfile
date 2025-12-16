@@ -11,8 +11,8 @@ COPY backend/requirements.txt /code/requirements.txt
 # Install dependencies
 RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
-# Copy the backend code
-COPY backend /code/app
+# Copy the backend code contents (app/, requirements.txt) into /code
+COPY backend /code
 
 # Set PYTHONPATH to include the app
 ENV PYTHONPATH=/code
