@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     jwt_expiration_days: int = 7
 
     # CORS
-    cors_origins: str = "http://localhost:3000"
+    cors_origins: str = "*"
 
     # Environment
     environment: str = "development"
