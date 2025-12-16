@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git fetch:*)",
+      "Bash(powershell.exe:*)",
+      "SlashCommand(/speckit.plan)",
+      "SlashCommand(/speckit.tasks)",
+      "SlashCommand(/speckit.implement)",
+      "Bash(git rev-parse:*)",
+      "Bash(python:*)",
+      "Bash(cat:*)",
+      "Bash(if [ -d \"alembic/versions\" ])",
+      "Bash(then echo \"Directory exists\")",
+      "Bash(else mkdir -p alembic/versions)",
+      "Bash(fi)",
+      "Bash(npm install:*)",
+      "Bash(alembic current:*)",
+      "Bash(if [ -d \"venv/Scripts\" ])",
+      "Bash(then source venv/Scripts/activate)",
+      "Bash(else source venv/bin/activate)",
+      "Bash(pip --version:*)",
+      "Bash(curl:*)",
+      "Bash(npm run dev:*)",
+      "Bash(taskkill:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

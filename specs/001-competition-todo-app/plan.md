@@ -2081,83 +2081,1764 @@ export default function LoginPage() {
 
 ### Phase 3: Core Task CRUD (5-6 hours)
 
-[CONTINUING WITH REMAINING PHASES - Due to length, I'll provide the structure and you can request full details for specific phases]
+**Priority**: HIGH
+**Dependencies**: Phase 2 complete (authentication working)
+**Time Estimate**: 5-6 hours
 
-**Structure for Remaining Phases**:
+#### Objectives
 
-**Phase 3: Core Task CRUD** (5-6h)
+- All task CRUD endpoints functional
+- Dashboard page with task list
+- Create task modal
+- Edit task modal
+- Delete confirmation
+- Toggle task completion with optimistic updates
+- Real-time task count
+- User data isolation (only see own tasks)
 
-- Task endpoints (GET, POST, PUT, PATCH, DELETE)
-- Dashboard layout
-- Task list component
-- Create/edit/delete modals
-- Toggle complete checkbox
-- Optimistic updates
+#### Task 3.1: Backend Task Endpoints (2 hours)
 
-**Phase 4: Advanced Features** (6-8h)
+**File: backend/app/schemas/task.py**
 
-- Priorities, tags, categories
-- Search with debounce
-- Filter & sort
-- Bulk operations
-- Task statistics
-- Due dates
+```python
+from pydantic import BaseModel, Field
+from typing import Optional
+from datetime import date
 
-**Phase 5: UI/UX Excellence** (4-5h)
+class TaskCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=2000)
+    priority: str = Field(default="medium", pattern="^(high|medium|low)$")
+    category: Optional[str] = Field(None, max_length=50)
+    due_date: Optional[date] = None
+    estimated_minutes: Optional[int] = Field(None, gt=0, le=1440)
 
-- Animations (Framer Motion)
-- Responsive design
-- Dark mode
-- Keyboard shortcuts
-- Empty states
-- Accessibility
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "title": "Complete project proposal",
+                "description": "Write and submit Q1 project proposal",
+                "priority": "high",
+                "category": "Work",
+                "due_date": "2025-01-15",
+                "estimated_minutes": 120
+            }]
+        }
+    }
 
-**Phase 6: Performance & Testing** (3-4h)
+class TaskUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=2000)
+    priority: Optional[str] = Field(None, pattern="^(high|medium|low)$")
+    category: Optional[str] = Field(None, max_length=50)
+    due_date: Optional[date] = None
+    estimated_minutes: Optional[int] = Field(None, gt=0, le=1440)
 
-- Code splitting
-- Image optimization
-- Lighthouse audit
-- E2E testing
-- Security audit
+class TaskResponse(BaseModel):
+    id: int
+    user_id: int
+    title: str
+    description: Optional[str]
+    completed: bool
+    priority: str
+    category: Optional[str]
+    due_date: Optional[date]
+    estimated_minutes: Optional[int]
+    created_at: str
+    updated_at: str
 
-**Phase 7: Documentation & Demo** (4-5h)
+    model_config = {
+        "from_attributes": True
+    }
 
-- README with screenshots
-- API documentation
-- 90-second demo video
-- Final deployment
+class TaskListResponse(BaseModel):
+    tasks: list[TaskResponse]
+    total: int
+    completed: int
+    pending: int
+```
+
+**File: backend/app/routers/tasks.py**
+
+```python
+from fastapi import APIRouter, HTTPException, status, Depends, Query
+from sqlmodel import Session, select, func
+from typing import Optional
+from app.database import get_session
+from app.models.task import Task, PriorityEnum
+from app.schemas.task import TaskCreate, TaskUpdate, TaskResponse, TaskListResponse
+from app.utils.dependencies import get_current_user
+from datetime import datetime
+
+router = APIRouter(prefix="/api/tasks", tags=["Tasks"])
+
+@router.get("", response_model=TaskListResponse)
+async def get_tasks(
+    completed: Optional[bool] = Query(None, description="Filter by completion status"),
+    priority: Optional[str] = Query(None, description="Filter by priority"),
+    category: Optional[str] = Query(None, description="Filter by category"),
+    search: Optional[str] = Query(None, description="Search in title and description"),
+    sort_by: str = Query("created_at", description="Sort field"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$"),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Get all tasks for authenticated user with optional filters.
+
+    Query Parameters:
+    - completed: Filter by completion status (true/false)
+    - priority: Filter by priority (high/medium/low)
+    - category: Filter by category
+    - search: Search query for title and description
+    - sort_by: Field to sort by (default: created_at)
+    - sort_order: Sort direction (asc/desc, default: desc)
+
+    Returns:
+    - List of tasks with statistics
+    """
+    # Base query - only user's tasks
+    query = select(Task).where(Task.user_id == current_user["user_id"])
+
+    # Apply filters
+    if completed is not None:
+        query = query.where(Task.completed == completed)
+
+    if priority:
+        query = query.where(Task.priority == priority)
+
+    if category:
+        query = query.where(Task.category == category)
+
+    if search:
+        search_pattern = f"%{search}%"
+        query = query.where(
+            (Task.title.ilike(search_pattern)) |
+            (Task.description.ilike(search_pattern))
+        )
+
+    # Apply sorting
+    order_column = getattr(Task, sort_by, Task.created_at)
+    if sort_order == "desc":
+        query = query.order_by(order_column.desc())
+    else:
+        query = query.order_by(order_column.asc())
+
+    # Execute query
+    tasks = session.exec(query).all()
+
+    # Calculate statistics
+    stats_query = select(
+        func.count(Task.id).label("total"),
+        func.sum(func.cast(Task.completed, sqlalchemy.Integer)).label("completed")
+    ).where(Task.user_id == current_user["user_id"])
+
+    stats = session.exec(stats_query).first()
+    total = stats.total or 0
+    completed_count = stats.completed or 0
+
+    return TaskListResponse(
+        tasks=[TaskResponse.model_validate(task) for task in tasks],
+        total=total,
+        completed=completed_count,
+        pending=total - completed_count
+    )
+
+@router.post("", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
+async def create_task(
+    task_data: TaskCreate,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Create new task for authenticated user.
+
+    Returns:
+    - Created task object
+    """
+    task = Task(
+        user_id=current_user["user_id"],
+        **task_data.model_dump()
+    )
+
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+
+    return TaskResponse.model_validate(task)
+
+@router.get("/{task_id}", response_model=TaskResponse)
+async def get_task(
+    task_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Get single task by ID.
+
+    Returns 404 if task doesn't exist or doesn't belong to user.
+    """
+    task = session.get(Task, task_id)
+
+    if not task or task.user_id != current_user["user_id"]:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found"
+        )
+
+    return TaskResponse.model_validate(task)
+
+@router.put("/{task_id}", response_model=TaskResponse)
+async def update_task(
+    task_id: int,
+    task_data: TaskUpdate,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Update task (full update).
+
+    Returns 404 if task doesn't exist or doesn't belong to user.
+    """
+    task = session.get(Task, task_id)
+
+    if not task or task.user_id != current_user["user_id"]:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found"
+        )
+
+    # Update fields
+    update_data = task_data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(task, field, value)
+
+    task.updated_at = datetime.utcnow()
+
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+
+    return TaskResponse.model_validate(task)
+
+@router.patch("/{task_id}/complete", response_model=TaskResponse)
+async def toggle_task_completion(
+    task_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Toggle task completion status.
+
+    Optimized endpoint for quick toggling with optimistic updates.
+    """
+    task = session.get(Task, task_id)
+
+    if not task or task.user_id != current_user["user_id"]:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found"
+        )
+
+    task.completed = not task.completed
+    task.updated_at = datetime.utcnow()
+
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+
+    return TaskResponse.model_validate(task)
+
+@router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_task(
+    task_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Delete task permanently.
+
+    Returns 404 if task doesn't exist or doesn't belong to user.
+    """
+    task = session.get(Task, task_id)
+
+    if not task or task.user_id != current_user["user_id"]:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found"
+        )
+
+    session.delete(task)
+    session.commit()
+
+    return None
+```
+
+**Register router in main.py**:
+
+```python
+# Add to app/main.py
+from app.routers import auth, tasks
+
+app.include_router(auth.router)
+app.include_router(tasks.router)
+```
+
+**Test Endpoints**:
+
+```bash
+# Login first to get token
+TOKEN=$(curl -X POST http://localhost:8001/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"password123"}' | jq -r '.token')
+
+# Create task
+curl -X POST http://localhost:8001/api/tasks \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Complete hackathon project",
+    "description": "Finish all features by Sunday",
+    "priority": "high",
+    "category": "Work"
+  }'
+
+# Get all tasks
+curl http://localhost:8001/api/tasks \
+  -H "Authorization: Bearer $TOKEN"
+
+# Toggle completion
+curl -X PATCH http://localhost:8001/api/tasks/1/complete \
+  -H "Authorization: Bearer $TOKEN"
+
+# Delete task
+curl -X DELETE http://localhost:8001/api/tasks/1 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Acceptance Criteria**:
+
+- ✅ GET /api/tasks returns only user's tasks
+- ✅ POST /api/tasks creates task
+- ✅ PATCH /api/tasks/:id/complete toggles completion
+- ✅ DELETE /api/tasks/:id deletes task
+- ✅ All endpoints enforce authentication
+- ✅ All endpoints enforce user ownership (404 for other users' tasks)
+
+---
+
+#### Task 3.2: Frontend Task Hooks (1 hour)
+
+**File: frontend/lib/hooks/useTasks.ts**
+
+```typescript
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import api from "@/lib/api";
+import type { Task } from "@/lib/types";
+import toast from "react-hot-toast";
+
+interface TaskFilters {
+  completed?: boolean;
+  priority?: string;
+  category?: string;
+  search?: string;
+}
+
+export function useTasks(filters?: TaskFilters) {
+  const queryClient = useQueryClient();
+
+  // Fetch tasks
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["tasks", filters],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (filters?.completed !== undefined)
+        params.append("completed", String(filters.completed));
+      if (filters?.priority) params.append("priority", filters.priority);
+      if (filters?.category) params.append("category", filters.category);
+      if (filters?.search) params.append("search", filters.search);
+
+      const response = await api.get(`/api/tasks?${params}`);
+      return response.data;
+    },
+  });
+
+  // Create task
+  const createTask = useMutation({
+    mutationFn: async (newTask: Partial<Task>) => {
+      const response = await api.post("/api/tasks", newTask);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      toast.success("Task created!");
+    },
+    onError: () => {
+      toast.error("Failed to create task");
+    },
+  });
+
+  // Update task
+  const updateTask = useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: Partial<Task> }) => {
+      const response = await api.put(`/api/tasks/${id}`, data);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      toast.success("Task updated!");
+    },
+    onError: () => {
+      toast.error("Failed to update task");
+    },
+  });
+
+  // Toggle completion (with optimistic update)
+  const toggleComplete = useMutation({
+    mutationFn: async (taskId: number) => {
+      const response = await api.patch(`/api/tasks/${taskId}/complete`);
+      return response.data;
+    },
+    onMutate: async (taskId) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ["tasks"] });
+
+      // Snapshot previous value
+      const previousTasks = queryClient.getQueryData(["tasks", filters]);
+
+      // Optimistically update
+      queryClient.setQueryData(["tasks", filters], (old: any) => {
+        if (!old) return old;
+        return {
+          ...old,
+          tasks: old.tasks.map((t: Task) =>
+            t.id === taskId ? { ...t, completed: !t.completed } : t
+          ),
+          completed: old.tasks.find((t: Task) => t.id === taskId)?.completed
+            ? old.completed - 1
+            : old.completed + 1,
+          pending: old.tasks.find((t: Task) => t.id === taskId)?.completed
+            ? old.pending + 1
+            : old.pending - 1,
+        };
+      });
+
+      return { previousTasks };
+    },
+    onError: (err, taskId, context) => {
+      // Rollback on error
+      queryClient.setQueryData(["tasks", filters], context?.previousTasks);
+      toast.error("Failed to update task");
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+    },
+  });
+
+  // Delete task
+  const deleteTask = useMutation({
+    mutationFn: async (taskId: number) => {
+      await api.delete(`/api/tasks/${taskId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      toast.success("Task deleted!");
+    },
+    onError: () => {
+      toast.error("Failed to delete task");
+    },
+  });
+
+  return {
+    tasks: data?.tasks || [],
+    stats: {
+      total: data?.total || 0,
+      completed: data?.completed || 0,
+      pending: data?.pending || 0,
+    },
+    isLoading,
+    error,
+    createTask,
+    updateTask,
+    toggleComplete,
+    deleteTask,
+  };
+}
+```
+
+---
+
+#### Task 3.3: Dashboard Layout & Task List (1.5 hours)
+
+**File: frontend/components/layout/DashboardNav.tsx**
+
+```typescript
+"use client";
+
+import { useAuth } from "@/lib/hooks/useAuth";
+import { LogOut, User } from "lucide-react";
+
+export function DashboardNav() {
+  const { currentUser, logout } = useAuth();
+
+  return (
+    <nav className="bg-white border-b border-gray-200">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex justify-between items-center h-16">
+          <div className="flex items-center">
+            <h1 className="text-2xl font-bold text-blue-600">Todo App</h1>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 text-sm text-gray-700">
+              <User className="w-4 h-4" />
+              <span>{currentUser?.name || currentUser?.email}</span>
+            </div>
+
+            <button
+              onClick={logout}
+              className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition"
+            >
+              <LogOut className="w-4 h-4" />
+              Log out
+            </button>
+          </div>
+        </div>
+      </div>
+    </nav>
+  );
+}
+```
+
+**File: frontend/app/dashboard/page.tsx**
+
+```typescript
+"use client";
+
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/lib/hooks/useAuth";
+import { useTasks } from "@/lib/hooks/useTasks";
+import { DashboardNav } from "@/components/layout/DashboardNav";
+import { TaskList } from "@/components/tasks/TaskList";
+import { CreateTaskButton } from "@/components/tasks/CreateTaskButton";
+import { Plus } from "lucide-react";
+
+export default function DashboardPage() {
+  const router = useRouter();
+  const { isAuthenticated, isLoadingUser } = useAuth();
+  const { tasks, stats, isLoading } = useTasks();
+
+  // Redirect if not authenticated
+  useEffect(() => {
+    if (!isLoadingUser && !isAuthenticated) {
+      router.push("/login");
+    }
+  }, [isAuthenticated, isLoadingUser, router]);
+
+  if (isLoadingUser || !isAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-gray-600">Loading...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <DashboardNav />
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Stats */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          <StatCard title="Total Tasks" value={stats.total} color="blue" />
+          <StatCard title="Completed" value={stats.completed} color="green" />
+          <StatCard title="Pending" value={stats.pending} color="yellow" />
+        </div>
+
+        {/* Header */}
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-2xl font-bold text-gray-900">My Tasks</h2>
+          <CreateTaskButton />
+        </div>
+
+        {/* Task List */}
+        {isLoading ? (
+          <div className="text-center py-12 text-gray-500">
+            Loading tasks...
+          </div>
+        ) : (
+          <TaskList tasks={tasks} />
+        )}
+      </main>
+    </div>
+  );
+}
+
+function StatCard({
+  title,
+  value,
+  color,
+}: {
+  title: string;
+  value: number;
+  color: string;
+}) {
+  const colorClasses = {
+    blue: "bg-blue-50 text-blue-700 border-blue-200",
+    green: "bg-green-50 text-green-700 border-green-200",
+    yellow: "bg-yellow-50 text-yellow-700 border-yellow-200",
+  };
+
+  return (
+    <div
+      className={`p-6 rounded-lg border ${
+        colorClasses[color as keyof typeof colorClasses]
+      }`}
+    >
+      <p className="text-sm font-medium opacity-80">{title}</p>
+      <p className="text-3xl font-bold mt-2">{value}</p>
+    </div>
+  );
+}
+```
+
+**File: frontend/components/tasks/TaskList.tsx**
+
+```typescript
+"use client";
+
+import { Task } from "@/lib/types";
+import { TaskCard } from "./TaskCard";
+
+interface TaskListProps {
+  tasks: Task[];
+}
+
+export function TaskList({ tasks }: TaskListProps) {
+  if (tasks.length === 0) {
+    return (
+      <div className="text-center py-12 bg-white rounded-lg border border-gray-200">
+        <p className="text-gray-500 text-lg">No tasks yet</p>
+        <p className="text-gray-400 text-sm mt-2">
+          Create your first task to get started!
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {tasks.map((task) => (
+        <TaskCard key={task.id} task={task} />
+      ))}
+    </div>
+  );
+}
+```
+
+**File: frontend/components/tasks/TaskCard.tsx**
+
+```typescript
+"use client";
+
+import { Task } from "@/lib/types";
+import { useTasks } from "@/lib/hooks/useTasks";
+import { Check, Trash2, Edit, Calendar } from "lucide-react";
+import { format } from "date-fns";
+
+interface TaskCardProps {
+  task: Task;
+}
+
+export function TaskCard({ task }: TaskCardProps) {
+  const { toggleComplete, deleteTask } = useTasks();
+
+  const priorityColors = {
+    high: "border-red-300 bg-red-50",
+    medium: "border-yellow-300 bg-yellow-50",
+    low: "border-green-300 bg-green-50",
+  };
+
+  return (
+    <div
+      className={`p-4 rounded-lg border-2 bg-white ${
+        task.completed ? "opacity-60" : ""
+      } transition-all hover:shadow-md`}
+    >
+      <div className="flex items-start gap-3">
+        {/* Checkbox */}
+        <button
+          onClick={() => toggleComplete.mutate(task.id)}
+          className={`mt-1 flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition ${
+            task.completed
+              ? "bg-blue-600 border-blue-600"
+              : "border-gray-300 hover:border-blue-500"
+          }`}
+        >
+          {task.completed && <Check className="w-3 h-3 text-white" />}
+        </button>
+
+        {/* Content */}
+        <div className="flex-1 min-w-0">
+          <h3
+            className={`font-medium text-gray-900 ${
+              task.completed ? "line-through" : ""
+            }`}
+          >
+            {task.title}
+          </h3>
+
+          {task.description && (
+            <p className="text-sm text-gray-600 mt-1">{task.description}</p>
+          )}
+
+          <div className="flex flex-wrap items-center gap-3 mt-2">
+            {/* Priority badge */}
+            <span
+              className={`px-2 py-0.5 text-xs font-medium rounded-full ${
+                priorityColors[task.priority as keyof typeof priorityColors]
+              }`}
+            >
+              {task.priority}
+            </span>
+
+            {/* Category */}
+            {task.category && (
+              <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-700 rounded-full">
+                {task.category}
+              </span>
+            )}
+
+            {/* Due date */}
+            {task.due_date && (
+              <span className="flex items-center gap-1 text-xs text-gray-500">
+                <Calendar className="w-3 h-3" />
+                {format(new Date(task.due_date), "MMM d")}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center gap-2">
+          <button
+            className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition"
+            title="Edit task"
+          >
+            <Edit className="w-4 h-4" />
+          </button>
+
+          <button
+            onClick={() => {
+              if (confirm("Delete this task?")) {
+                deleteTask.mutate(task.id);
+              }
+            }}
+            className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition"
+            title="Delete task"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+**Acceptance Criteria**:
+
+- ✅ Dashboard displays task statistics
+- ✅ Task list shows all user tasks
+- ✅ Checkbox toggles completion instantly (optimistic update)
+- ✅ Delete button removes tasks
+- ✅ Empty state shown when no tasks
+- ✅ Navigation with logout button
+
+---
+
+**Phase 3 Complete! ✅**
+
+**What You Have Now**:
+
+- ✅ Full CRUD task endpoints
+- ✅ Dashboard with task list
+- ✅ Task cards with completion toggle
+- ✅ Delete functionality
+- ✅ Optimistic updates
+- ✅ User data isolation
+- ✅ Real-time statistics
+
+**Time Check**: Should take 5-6 hours. Test all features before Phase 4.
 
 **TOTAL: 40-48 hours**
 
 ---
 
-## 4. Advanced Patterns & Code Examples
+### Phase 4: Advanced Features (6-8 hours)
 
-[Due to response length limits, I'll create this as a separate file. Key patterns included:]
+**Priority**: HIGH
+**Dependencies**: Phase 3 complete
+**Time Estimate**: 6-8 hours
+
+#### Objectives
+
+- Create task modal with full form
+- Edit task modal
+- Search with debounce (300ms)
+- Filter by status/priority/category
+- Sort by multiple fields
+- Bulk operations (delete, complete)
+- Task statistics dashboard
+
+#### Key Implementation Notes
+
+**Create/Edit Task Modal** - Use Headless UI Dialog with React Hook Form + Zod validation. Include fields: title, description, priority dropdown, category dropdown, due date picker, estimated time.
+
+**Search Implementation**:
+
+```typescript
+// frontend/lib/hooks/useDebounce.ts
+export function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+
+// Usage in dashboard
+const [searchQuery, setSearchQuery] = useState("");
+const debouncedSearch = useDebounce(searchQuery, 300);
+const { tasks } = useTasks({ search: debouncedSearch });
+```
+
+**Filter/Sort UI** - Dropdown menus with TanStack Query refetch on change. Add "Clear Filters" button.
+
+**Bulk Operations** - Checkbox selection, "Select All" toggle, bulk action dropdown (Delete Selected, Mark Complete, Mark Incomplete).
+
+**Time Estimate Breakdown**:
+
+- Create/Edit modals: 2h
+- Search + debounce: 1h
+- Filters + sorting UI: 1.5h
+- Bulk operations: 1.5h
+- Statistics enhancements: 1h
+
+---
+
+### Phase 5: UI/UX Excellence (4-5 hours)
+
+**Priority**: MEDIUM
+**Dependencies**: Phase 4 complete
+**Time Estimate**: 4-5 hours
+
+#### Objectives
+
+- Framer Motion animations (page transitions, list animations)
+- Dark mode toggle with system preference detection
+- Keyboard shortcuts (n=new, /=search, esc=close modal)
+- Loading skeletons
+- Empty states with illustrations
+- Accessibility (ARIA labels, keyboard navigation)
+- Responsive mobile design
+
+#### Key Implementation Notes
+
+**Animations**:
+
+```typescript
+// Stagger list animation
+<motion.div variants={{ show: { transition: { staggerChildren: 0.05 } } }}>
+  {tasks.map((task) => (
+    <motion.div
+      key={task.id}
+      variants={{ hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0 } }}
+      exit={{ opacity: 0, x: -100 }}
+    >
+      <TaskCard task={task} />
+    </motion.div>
+  ))}
+</motion.div>
+```
+
+**Dark Mode** - Use Tailwind dark: classes, store preference in localStorage, add toggle in nav.
+
+**Keyboard Shortcuts** - Use react-hotkeys-hook or custom useEffect listener.
+
+**Responsive Design** - Mobile-first Tailwind breakpoints (sm:, md:, lg:), collapsible sidebar on mobile.
+
+**Time Estimate Breakdown**:
+
+- Animations: 1.5h
+- Dark mode: 1h
+- Keyboard shortcuts: 0.5h
+- Loading/empty states: 1h
+- Mobile responsive: 1h
+
+---
+
+### Phase 6: Performance & Testing (3-4 hours)
+
+**Priority**: MEDIUM
+**Dependencies**: Phase 5 complete
+**Time Estimate**: 3-4 hours
+
+#### Objectives
+
+- Lighthouse audit (target >90 all categories)
+- Image optimization
+- Code splitting verification
+- Manual testing checklist
+- Security testing
+- Performance profiling
+
+#### Manual Testing Checklist
+
+**Authentication**:
+
+- ✅ Signup with valid email/password
+- ✅ Signup with duplicate email (409 error)
+- ✅ Signup with weak password (422 error)
+- ✅ Login with correct credentials
+- ✅ Login with wrong password (401 error)
+- ✅ Logout clears token
+- ✅ Rate limiting triggers on 6th signup (429)
+
+**Tasks**:
+
+- ✅ Create task with all fields
+- ✅ Create task with only title
+- ✅ Edit task updates fields
+- ✅ Toggle completion (optimistic update)
+- ✅ Delete task shows confirmation
+- ✅ Search filters tasks
+- ✅ Filter by priority/status/category
+- ✅ Sort by date/priority/title
+- ✅ Bulk delete multiple tasks
+- ✅ Statistics update in real-time
+
+**UI/UX**:
+
+- ✅ Animations smooth (60fps)
+- ✅ Dark mode toggles correctly
+- ✅ Keyboard shortcuts work
+- ✅ Mobile responsive (test 375px, 768px, 1024px)
+- ✅ Loading states show correctly
+- ✅ Empty states display
+
+**Performance**:
+
+- ✅ API response <500ms (check DevTools Network)
+- ✅ Page load <2s (check Lighthouse)
+- ✅ No console errors
+- ✅ No console warnings in production build
+
+**Security Testing**:
+
+```bash
+# Test JWT expiration
+# Test unauthorized access (no token)
+# Test accessing other user's tasks (404 not 403)
+# Test SQL injection in search (should be safe with SQLModel)
+# Test XSS in task title/description (React escapes by default)
+```
+
+**Lighthouse Audit**:
+
+```bash
+# Build production frontend
+cd frontend
+npm run build
+npm run start
+
+# Run Lighthouse
+# Chrome DevTools → Lighthouse → Generate Report
+# Target scores: Performance >90, Accessibility >95, Best Practices >90, SEO >90
+```
+
+**Performance Optimizations**:
+
+- ✅ Next.js Image component for logos
+- ✅ Dynamic imports for modals
+- ✅ React.memo for TaskCard if >100 tasks
+- ✅ Virtual scrolling if >1000 tasks (use @tanstack/react-virtual)
+
+---
+
+### Phase 7: Documentation & Demo (4-5 hours)
+
+**Priority**: CRITICAL
+**Dependencies**: Phase 6 complete
+**Time Estimate**: 4-5 hours
+
+#### Objectives
+
+- Comprehensive README with screenshots
+- API documentation (auto-generated from FastAPI)
+- 90-second demo video
+- Final deployment verification
+- Submission materials
+
+#### README Template
+
+```markdown
+# Todo App - Hackathon II Phase II 🏆
+
+> **Competition Entry**: Production-grade full-stack todo application
+> **Target**: 1st Place (98/100)
+> **Tech Stack**: Next.js 16 + FastAPI + PostgreSQL
+
+## 🎯 Live Demo
+
+- **Frontend**: https://your-app.vercel.app
+- **API Docs**: https://your-api.railway.app/docs
+- **Demo Video**: https://youtu.be/your-video
+
+## ✨ Features
+
+### Core Features (Required)
+
+- ✅ User Authentication (JWT, bcrypt, rate limiting)
+- ✅ Create/Read/Update/Delete Tasks
+- ✅ Mark Tasks Complete
+- ✅ Multi-user Data Isolation
+
+### Advanced Features (10+)
+
+- ✅ Task Priorities (High/Medium/Low)
+- ✅ Task Categories (Work, Personal, etc.)
+- ✅ Task Tags (Multi-select)
+- ✅ Real-time Search (300ms debounce)
+- ✅ Advanced Filtering (Status, Priority, Category)
+- ✅ Multi-field Sorting
+- ✅ Bulk Operations (Delete, Complete)
+- ✅ Task Statistics Dashboard
+- ✅ Due Dates with Visual Indicators
+- ✅ Dark Mode (System Preference)
+- ✅ Keyboard Shortcuts (n, /, esc)
+- ✅ Optimistic UI Updates
+- ✅ Responsive Mobile Design
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Node.js 18+
+- Python 3.11+
+- PostgreSQL (or use Neon)
+
+### Installation
+
+1. Clone repository
+   \`\`\`bash
+   git clone https://github.com/yourusername/hackathon-todo.git
+   cd hackathon-todo
+   \`\`\`
+
+2. Backend setup
+   \`\`\`bash
+   cd backend
+   python -m venv venv
+   source venv/bin/activate # Windows: venv\\Scripts\\activate
+   pip install -r requirements.txt
+   cp .env.example .env
+
+# Edit .env with your DATABASE_URL and JWT_SECRET
+
+alembic upgrade head
+uvicorn app.main:app --reload
+\`\`\`
+
+3. Frontend setup
+   \`\`\`bash
+   cd frontend
+   npm install
+   cp .env.local.example .env.local
+
+# Edit .env.local with NEXT_PUBLIC_API_URL
+
+npm run dev
+\`\`\`
+
+4. Open http://localhost:3000
+
+## 📚 API Documentation
+
+Visit http://localhost:8001/docs for interactive Swagger UI
+
+## 🏗️ Architecture
+
+### Tech Stack
+
+- **Frontend**: Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS
+- **Backend**: FastAPI, SQLModel, PostgreSQL
+- **Deployment**: Vercel (Frontend) + Railway (Backend) + Neon (Database)
+
+### Key Decisions
+
+- JWT auth for stateless scalability
+- Optimistic updates for instant UX
+- TanStack Query for caching
+- Rate limiting for security
+- Dark mode for accessibility
+
+## 📊 Performance Metrics
+
+- ⚡ API Response: <500ms (p95)
+- ⚡ Page Load: <2s
+- ⚡ Lighthouse Score: >90
+- ⚡ Zero Console Errors
+
+## 🔒 Security
+
+- Bcrypt password hashing (cost 12)
+- JWT with 7-day expiration
+- Rate limiting (5 login/15min, 3 signup/hour)
+- CORS whitelist
+- Input validation (Zod + Pydantic)
+
+## 📱 Screenshots
+
+[Add 4-6 screenshots: Login, Dashboard, Create Task, Dark Mode, Mobile View]
+
+## 🎬 Demo Video
+
+[90-second video showing all features]
+
+## 👨‍💻 Development
+
+\`\`\`bash
+
+# Run tests
+
+cd backend && pytest
+cd frontend && npm test
+
+# Type check
+
+cd frontend && npm run type-check
+
+# Lint
+
+cd frontend && npm run lint
+\`\`\`
+
+## 📝 License
+
+MIT License - Built for Hackathon II Competition
+```
+
+#### Demo Video Script (90 seconds)
+
+**0-10s**: Show login/signup, explain JWT auth + rate limiting
+**10-25s**: Create task with all fields (title, description, priority, category, due date)
+**25-40s**: Demonstrate optimistic updates (instant checkbox toggle)
+**40-55s**: Show search (debounced), filters, sorting, bulk operations
+**55-70s**: Toggle dark mode, show keyboard shortcuts, mobile responsive
+**70-85s**: Show statistics dashboard, highlight performance (Lighthouse score)
+**85-90s**: Thank you, mention production-ready features (security, accessibility)
+
+#### Screenshot Checklist
+
+1. ✅ Landing/Login page (light mode)
+2. ✅ Dashboard with tasks (light mode)
+3. ✅ Create task modal (all fields filled)
+4. ✅ Dashboard with filters/search active
+5. ✅ Dark mode dashboard
+6. ✅ Mobile view (375px width)
+
+**Time Estimate Breakdown**:
+
+- README writing: 1.5h
+- Screenshots: 0.5h
+- Demo video: 2h
+- Final testing: 1h
+
+---
+
+## 4. Advanced Patterns & Code Examples
 
 ### 4.1 Optimistic Updates Pattern
 
-[Full code example provided in ADR-004]
+See ADR-004 in Section 2 for complete implementation.
 
 ### 4.2 Real-time Search with Debounce
 
-[Code example in ADR section]
+See Phase 4 for useDebounce hook implementation.
 
 ### 4.3 Virtual Scrolling (1000+ tasks)
 
-[Code example using @tanstack/react-virtual]
+```typescript
+import { useVirtualizer } from "@tanstack/react-virtual";
+
+function TaskList({ tasks }: { tasks: Task[] }) {
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: tasks.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 80, // Task card height
+    overscan: 5,
+  });
+
+  return (
+    <div ref={parentRef} style={{ height: "600px", overflow: "auto" }}>
+      <div
+        style={{
+          height: `${virtualizer.getTotalSize()}px`,
+          position: "relative",
+        }}
+      >
+        {virtualizer.getVirtualItems().map((virtualRow) => (
+          <div
+            key={virtualRow.index}
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              width: "100%",
+              transform: `translateY(${virtualRow.start}px)`,
+            }}
+          >
+            <TaskCard task={tasks[virtualRow.index]} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
 
 ### 4.4 Keyboard Shortcuts Handler
 
-[Code example with react-hotkeys-hook]
+```typescript
+import { useEffect } from "react";
+
+export function useKeyboardShortcuts() {
+  useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      // Ignore if typing in input
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      ) {
+        return;
+      }
+
+      switch (e.key) {
+        case "n":
+          // Open new task modal
+          e.preventDefault();
+          openCreateModal();
+          break;
+        case "/":
+          // Focus search
+          e.preventDefault();
+          document.getElementById("search-input")?.focus();
+          break;
+        case "Escape":
+          // Close modal
+          closeAllModals();
+          break;
+        case "?":
+          // Show keyboard shortcuts help
+          showShortcutsModal();
+          break;
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyPress);
+    return () => document.removeEventListener("keydown", handleKeyPress);
+  }, []);
+}
+```
 
 ### 4.5 Rate Limiting Implementation
 
-[Code example in Phase 2]
+See Phase 2 Task 2.4 for complete slowapi implementation.
 
 ### 4.6 Database Query Optimization
 
-[Code examples preventing N+1 queries]
+```python
+# Bad: N+1 query problem
+tasks = session.exec(select(Task).where(Task.user_id == user_id)).all()
+for task in tasks:
+    tags = session.exec(select(Tag).join(TaskTag).where(TaskTag.task_id == task.id)).all()
+
+# Good: Use joinedload to eager load relationships
+from sqlmodel import joinedload
+
+tasks = session.exec(
+    select(Task)
+    .where(Task.user_id == user_id)
+    .options(joinedload(Task.tags))
+).all()
+
+# Good: Use indexes for common queries
+# Already defined in models: index=True on user_id, completed, priority
+```
+
+---
+
+## 5. Deployment Configuration
+
+### Railway Backend Configuration
+
+**railway.toml**:
+
+```toml
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/health"
+healthcheckTimeout = 100
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+```
+
+**Environment Variables** (set in Railway dashboard):
+
+```bash
+DATABASE_URL=postgresql://user:pass@host/db?sslmode=require
+JWT_SECRET=your-256-bit-secret
+JWT_ALGORITHM=HS256
+JWT_EXPIRATION_DAYS=7
+CORS_ORIGINS=https://your-app.vercel.app,http://localhost:3000
+ENVIRONMENT=production
+```
+
+### Vercel Frontend Configuration
+
+**vercel.json**:
+
+```json
+{
+  "buildCommand": "npm run build",
+  "devCommand": "npm run dev",
+  "installCommand": "npm install",
+  "framework": "nextjs",
+  "outputDirectory": ".next"
+}
+```
+
+**Environment Variables** (set in Vercel dashboard):
+
+```bash
+NEXT_PUBLIC_API_URL=https://your-api.railway.app
+NEXT_PUBLIC_APP_NAME=Todo App - Hackathon II
+```
+
+### Docker Compose (Local Development)
+
+**docker-compose.yml**:
+
+```yaml
+version: "3.8"
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: todoapp
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    command: uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/todoapp
+      JWT_SECRET: dev-secret-change-in-production
+    volumes:
+      - ./backend:/app
+
+  frontend:
+    build: ./frontend
+    command: npm run dev
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8001
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+volumes:
+  postgres_data:
+```
+
+---
+
+## 6. Testing Strategy
+
+### Manual Testing (Primary Approach)
+
+**Why Manual Testing?**
+
+- Hackathon timeline (2 days) prioritizes features over test coverage
+- Manual testing sufficient to verify all functionality
+- Demo video serves as acceptance test
+- Focus time on features that judges see, not tests they don't
+
+**Testing Checklist**: See Phase 6 for complete checklist.
+
+### Optional Automated Tests (If Time Permits)
+
+**Backend Tests** (pytest):
+
+```python
+# tests/test_auth.py
+def test_signup_success(client):
+    response = client.post("/api/auth/signup", json={
+        "email": "test@example.com",
+        "password": "password123"
+    })
+    assert response.status_code == 201
+    assert "token" in response.json()
+
+def test_signup_duplicate_email(client):
+    # First signup
+    client.post("/api/auth/signup", json={"email": "test@example.com", "password": "pass123"})
+    # Second signup (duplicate)
+    response = client.post("/api/auth/signup", json={"email": "test@example.com", "password": "pass456"})
+    assert response.status_code == 409
+
+def test_login_wrong_password(client):
+    client.post("/api/auth/signup", json={"email": "test@example.com", "password": "correct"})
+    response = client.post("/api/auth/login", json={"email": "test@example.com", "password": "wrong"})
+    assert response.status_code == 401
+```
+
+**Frontend Tests** (Jest + React Testing Library):
+
+```typescript
+// __tests__/TaskCard.test.tsx
+test("toggles task completion on checkbox click", async () => {
+  const task = { id: 1, title: "Test task", completed: false };
+  render(<TaskCard task={task} />);
+
+  const checkbox = screen.getByRole("button", { name: /toggle/i });
+  await userEvent.click(checkbox);
+
+  expect(mockToggleComplete).toHaveBeenCalledWith(1);
+});
+```
+
+---
+
+## 7. Performance Optimization
+
+### Frontend Optimizations
+
+1. **Code Splitting**:
+
+   - Next.js App Router does this automatically per route
+   - Dynamic import for modals: `const Modal = dynamic(() => import('./Modal'))`
+
+2. **Image Optimization**:
+
+   - Use Next.js Image component: `<Image src="/logo.png" width={200} height={50} alt="Logo" />`
+   - WebP format with fallbacks
+
+3. **Bundle Size**:
+
+   - Use `npm run build` to check bundle size
+   - Analyze with `@next/bundle-analyzer`
+   - Target: <200KB initial JS load
+
+4. **Caching Strategy**:
+   - TanStack Query: 5min staleTime for tasks
+   - Next.js: Static page generation for landing page
+   - HTTP headers: Cache-Control for static assets
+
+### Backend Optimizations
+
+1. **Database Connection Pooling**:
+
+   - Already configured in Phase 1: pool_size=10, max_overflow=20
+
+2. **Query Optimization**:
+
+   - Indexes on user_id, completed, priority, due_date
+   - Avoid N+1 queries with joinedload
+   - Pagination for large result sets (if >1000 tasks)
+
+3. **Response Time**:
+   - Target: <500ms at p95
+   - Profile with FastAPI's built-in `/docs` timing
+   - Use async/await for DB queries
+
+### Lighthouse Optimization Checklist
+
+- ✅ First Contentful Paint <1.8s
+- ✅ Largest Contentful Paint <2.5s
+- ✅ Total Blocking Time <200ms
+- ✅ Cumulative Layout Shift <0.1
+- ✅ Speed Index <3.4s
+- ✅ Accessibility score >95
+- ✅ Best Practices score >90
+- ✅ SEO score >90
+
+---
+
+## 8. Security Hardening
+
+### Authentication Security
+
+- ✅ Bcrypt with cost factor 12 (Phase 2)
+- ✅ JWT with 7-day expiration
+- ✅ Rate limiting on auth endpoints
+- ✅ Generic error messages (prevent email enumeration)
+- ✅ HTTPS only in production (enforced by Vercel/Railway)
+
+### Input Validation
+
+- ✅ Frontend: Zod schemas
+- ✅ Backend: Pydantic models
+- ✅ SQL injection protection (SQLModel uses parameterized queries)
+- ✅ XSS protection (React escapes by default)
+
+### CORS Configuration
+
+```python
+# Only allow whitelisted origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://your-app.vercel.app"],  # Never use "*" in production
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["*"],
+)
+```
+
+### Security Headers
+
+```python
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+```
+
+---
+
+## 9. Documentation Requirements
+
+### API Documentation
+
+- ✅ Auto-generated from FastAPI at /docs (Swagger UI)
+- ✅ Auto-generated from FastAPI at /redoc (ReDoc)
+- ✅ Include request/response examples in Pydantic schemas
+- ✅ Document rate limits in endpoint docstrings
+
+### Code Documentation
+
+- ✅ Docstrings for all functions
+- ✅ Type hints everywhere (Python + TypeScript)
+- ✅ Comments for complex logic only
+- ✅ README with architecture diagram
+
+### User Documentation
+
+- ✅ README Quick Start section
+- ✅ Keyboard shortcuts help modal
+- ✅ Demo video (90 seconds)
+
+---
+
+## 10. Risk Mitigation
+
+### Timeline Risks
+
+| Risk                              | Impact                  | Probability | Mitigation                                                                                       |
+| --------------------------------- | ----------------------- | ----------- | ------------------------------------------------------------------------------------------------ |
+| Phase takes longer than estimated | Behind schedule         | Medium      | Cut optional features (dark mode, keyboard shortcuts), focus on core CRUD + one advanced feature |
+| Deployment issues                 | Can't submit            | Low         | Deploy early (Phase 1), test continuously                                                        |
+| Database connection issues        | App doesn't work        | Low         | Use Neon (managed, reliable), have backup local PostgreSQL                                       |
+| CORS errors                       | Frontend can't call API | Medium      | Configure CORS in Phase 1, test immediately                                                      |
+| Rate limiting blocks testing      | Can't test auth         | Low         | Use different IPs or temporarily disable for testing                                             |
+
+### Quality Risks
+
+| Risk                     | Impact                   | Probability | Mitigation                                            |
+| ------------------------ | ------------------------ | ----------- | ----------------------------------------------------- |
+| Bugs in core features    | Lost points              | Medium      | Manual testing checklist (Phase 6), test continuously |
+| Poor Lighthouse score    | Lost UI/UX points        | Low         | Follow performance guidelines, audit early            |
+| Security vulnerabilities | Lost code quality points | Low         | Follow security checklist, use established libraries  |
+| Unclear README           | Lost presentation points | Medium      | Use template (Phase 7), get feedback                  |
+
+### Contingency Plan
+
+**If behind schedule after Day 1**:
+
+1. Cut Phase 5 optional features (dark mode, animations)
+2. Simplify Phase 4 (skip bulk operations, keep search/filter)
+3. Focus on core: Auth + CRUD + 3 advanced features + good README
+
+**Minimum Viable Submission** (if only 24h available):
+
+- Phase 1: Foundation (6h)
+- Phase 2: Authentication (5h)
+- Phase 3: Core CRUD (6h)
+- Phase 4: Search + Filter only (3h)
+- Phase 7: README + Screenshots (2h)
+- **Total: 22h = Still competitive**
+
+---
+
+## 11. Competition Optimization
+
+### Judging Criteria Mapping
+
+#### Functionality (40 points)
+
+**What judges look for**:
+
+- All required features work
+- Advanced features implemented
+- No bugs or errors
+- Edge cases handled
+
+**Our Strategy**:
+
+- ✅ All 5 required features (auth, CRUD, complete, multi-user)
+- ✅ 10+ advanced features
+- ✅ Comprehensive manual testing (Phase 6)
+- ✅ Error handling everywhere
+
+**Expected Score**: 40/40
+
+#### Code Quality (20 points)
+
+**What judges look for**:
+
+- Clean, readable code
+- TypeScript strict mode
+- Proper architecture
+- No code smells
+
+**Our Strategy**:
+
+- ✅ Specification-driven development
+- ✅ TypeScript strict, zero 'any' types
+- ✅ ADR documentation (shows architectural thinking)
+- ✅ Consistent patterns (SQLModel, TanStack Query)
+
+**Expected Score**: 20/20
+
+#### UI/UX (20 points)
+
+**What judges look for**:
+
+- Professional design
+- Responsive
+- Smooth interactions
+- Accessibility
+
+**Our Strategy**:
+
+- ✅ Tailwind for consistent design
+- ✅ Framer Motion animations (60fps)
+- ✅ Mobile-first responsive
+- ✅ Dark mode (bonus points)
+- ✅ Optimistic updates (feels instant)
+
+**Expected Score**: 19/20
+
+#### Innovation (10 points)
+
+**What judges look for**:
+
+- Unique features
+- Technical sophistication
+- Production-ready patterns
+
+**Our Strategy**:
+
+- ✅ Optimistic updates (most won't have this)
+- ✅ Rate limiting (shows security thinking)
+- ✅ Keyboard shortcuts (power user feature)
+- ✅ Debounced search (performance optimization)
+
+**Expected Score**: 9/10
+
+#### Presentation (10 points)
+
+**What judges look for**:
+
+- Clear README
+- Good screenshots
+- Demo video quality
+- Easy to understand
+
+**Our Strategy**:
+
+- ✅ Comprehensive README (template in Phase 7)
+- ✅ 6 high-quality screenshots
+- ✅ 90-second demo video (scripted)
+- ✅ Live deployment links
+
+**Expected Score**: 10/10
+
+**TOTAL: 98/100 = 1ST PLACE** 🏆
+
+---
+
+## 12. Success Metrics
+
+### Measurable Targets
+
+**Performance**:
+
+- ✅ API response time: <500ms (p95) - Measure in DevTools Network tab
+- ✅ Page load time: <2s - Measure with Lighthouse
+- ✅ Lighthouse Performance: >90 - Screenshot as proof
+- ✅ Time to Interactive: <3s - Lighthouse metric
+
+**Code Quality**:
+
+- ✅ Zero console errors - Verify in production build
+- ✅ Zero TypeScript 'any' types - Run `tsc --noEmit`
+- ✅ All ESLint rules passing - Run `npm run lint`
+- ✅ 100% TypeScript coverage - Check tsconfig.json strict mode
+
+**Features**:
+
+- ✅ 5 required features - Checked against spec.md
+- ✅ 10+ advanced features - Counted and documented in README
+- ✅ Zero critical bugs - Verified with manual testing checklist
+
+**Security**:
+
+- ✅ Rate limiting active - Test with repeated requests
+- ✅ JWT validation working - Test with invalid/expired tokens
+- ✅ CORS configured - Test from different origin
+- ✅ Password hashing - Verify bcrypt in database
+
+**Documentation**:
+
+- ✅ README >1000 words - Word count check
+- ✅ All sections complete - Use template checklist
+- ✅ 6 screenshots - Visual verification
+- ✅ 90-second video - Timed and reviewed
 
 ---
 
