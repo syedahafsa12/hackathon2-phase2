@@ -215,7 +215,7 @@ export const TagManager: React.FC = () => {
                       Created {new Date(tag.created_at).toLocaleDateString()}
                     </span>
                     <button
-                      onClick={() => handleStartEdit(tag.id, tag.name, tag.color)}
+                      onClick={() => handleStartEdit(tag.id, tag.name, tag.color || null)}
                       className="p-1 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
                       title="Edit tag"
                     >
