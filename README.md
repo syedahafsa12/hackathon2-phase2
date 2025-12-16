@@ -1,3 +1,12 @@
+---
+title: Todo Backend
+emoji: 🚀
+colorFrom: blue
+colorTo: purple
+sdk: docker
+pinned: false
+---
+
 # Todo App - Hackathon II Phase II 🏆
 
 > **Competition Entry**: Production-grade full-stack todo application built for winning
