@@ -20,7 +20,7 @@ export function useTags() {
   const tagsQuery = useQuery({
     queryKey: ['tags'],
     queryFn: async () => {
-      const response = await api.get<Tag[]>('/tags')
+      const response = await api.get<Tag[]>('/tags/')
       return response.data
     },
   })
@@ -28,7 +28,7 @@ export function useTags() {
   // Create tag mutation
   const createTag = useMutation({
     mutationFn: async (data: CreateTagData) => {
-      const response = await api.post<Tag>('/tags', data)
+      const response = await api.post<Tag>('/tags/', data)
       return response.data
     },
     onSuccess: () => {
@@ -44,7 +44,7 @@ export function useTags() {
   // Update tag mutation
   const updateTag = useMutation({
     mutationFn: async ({ id, data }: { id: number; data: UpdateTagData }) => {
-      const response = await api.patch<Tag>(`/tags/${id}`, data)
+      const response = await api.patch<Tag>(`/tags/${id}/`, data)
       return response.data
     },
     onSuccess: () => {
@@ -61,7 +61,7 @@ export function useTags() {
   // Delete tag mutation
   const deleteTag = useMutation({
     mutationFn: async (id: number) => {
-      await api.delete(`/tags/${id}`)
+      await api.delete(`/tags/${id}/`)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tags'] })

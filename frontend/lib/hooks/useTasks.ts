@@ -60,7 +60,7 @@ export function useTasks(filters: TaskFilters = {}) {
     queryKey: ["tasks", filters],
     queryFn: async () => {
       const response = await api.get<TaskListResponse>(
-        `/tasks?${params.toString()}`
+        `/tasks/?${params.toString()}`
       );
       return response.data;
     },
@@ -69,7 +69,7 @@ export function useTasks(filters: TaskFilters = {}) {
   // Create task mutation
   const createTask = useMutation({
     mutationFn: async (data: CreateTaskData) => {
-      const response = await api.post<Task>("/tasks", data);
+      const response = await api.post<Task>("/tasks/", data);
       return response.data;
     },
     onSuccess: () => {
@@ -86,7 +86,7 @@ export function useTasks(filters: TaskFilters = {}) {
   // Update task mutation
   const updateTask = useMutation({
     mutationFn: async ({ id, data }: { id: number; data: UpdateTaskData }) => {
-      const response = await api.patch<Task>(`/tasks/${id}`, data);
+      const response = await api.patch<Task>(`/tasks/${id}/`, data);
       return response.data;
     },
     onSuccess: () => {
@@ -103,7 +103,7 @@ export function useTasks(filters: TaskFilters = {}) {
   // Delete task mutation
   const deleteTask = useMutation({
     mutationFn: async (id: number) => {
-      await api.delete(`/tasks/${id}`);
+      await api.delete(`/tasks/${id}/`);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
@@ -119,7 +119,7 @@ export function useTasks(filters: TaskFilters = {}) {
   // Bulk delete mutation
   const bulkDeleteTasks = useMutation({
     mutationFn: async (taskIds: number[]) => {
-      await api.post("/tasks/bulk-delete", taskIds);
+      await api.post("/tasks/bulk-delete/", taskIds);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
@@ -144,7 +144,7 @@ export function useTasks(filters: TaskFilters = {}) {
       // Build query string with multiple task_ids
       const params = new URLSearchParams();
       taskIds.forEach(id => params.append('task_ids', String(id)));
-      const response = await api.patch<Task[]>(`/tasks/bulk-update?${params.toString()}`, data);
+      const response = await api.patch<Task[]>(`/tasks/bulk-update/?${params.toString()}`, data);
       return response.data;
     },
     onSuccess: () => {
