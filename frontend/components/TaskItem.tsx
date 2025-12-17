@@ -28,7 +28,7 @@ export const TaskItem: React.FC<TaskItemProps> = ({
   // Toggle task completion
   const toggleTaskCompletion = useMutation({
     mutationFn: async (completed: boolean) => {
-      const response = await api.patch<Task>(`/tasks/${task.id}`, { completed })
+      const response = await api.patch<Task>(`/tasks/${task.id}/`, { completed })
       return response.data
     },
     onMutate: async (completed) => {
