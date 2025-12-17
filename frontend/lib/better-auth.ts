@@ -1,8 +1,8 @@
 // File: lib/better-auth.ts
-// Spec: specs/001-competition-todo-app/file.md § FR-1 (Authentication with Better Auth)
+// Spec: specs/001-competition-todo-app/file.md § FR-1 (Authentication)
 //
-// Better Auth wrapper around existing JWT authentication system
-// This provides Better Auth API compatibility while using our FastAPI JWT backend
+// Custom authentication client for FastAPI JWT backend
+// Provides simple auth API using axios client
 
 import api from '@/lib/api'
 import type { User, AuthResponse } from '@/lib/types'

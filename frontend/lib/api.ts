@@ -8,23 +8,25 @@ import axios from "axios";
  * - Fails fast if misconfigured
  */
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL;
+// CRITICAL FIX: Vercel env var not being read during build
+// Hardcode production URL as fallback
+const PRODUCTION_API_URL = "https://syedahafsa58-todo-phase2.hf.space";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || PRODUCTION_API_URL;
 
 // Debug logging (will show in browser console)
 if (typeof window !== "undefined") {
   console.log("🔧 API Configuration:");
-  console.log("  NEXT_PUBLIC_API_URL:", API_URL);
+  console.log("  NEXT_PUBLIC_API_URL from env:", process.env.NEXT_PUBLIC_API_URL);
+  console.log("  Using API_URL:", API_URL);
   console.log("  NODE_ENV:", process.env.NODE_ENV);
 }
 
-if (!API_URL) {
-  throw new Error(
-    "NEXT_PUBLIC_API_URL is not defined. Set it in Vercel Environment Variables."
-  );
+// FORCE HTTPS: Convert any http:// to https://
+let normalizedApiUrl = API_URL.replace(/\/$/, "");
+if (normalizedApiUrl.startsWith("http://")) {
+  console.warn("⚠️ Converting HTTP to HTTPS:", normalizedApiUrl);
+  normalizedApiUrl = normalizedApiUrl.replace("http://", "https://");
 }
-
-// Remove trailing slash if present
-const normalizedApiUrl = API_URL.replace(/\/$/, "");
 
 // Debug final URL
 if (typeof window !== "undefined") {
