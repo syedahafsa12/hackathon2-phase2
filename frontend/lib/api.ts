@@ -10,6 +10,13 @@ import axios from "axios";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
+// Debug logging (will show in browser console)
+if (typeof window !== "undefined") {
+  console.log("🔧 API Configuration:");
+  console.log("  NEXT_PUBLIC_API_URL:", API_URL);
+  console.log("  NODE_ENV:", process.env.NODE_ENV);
+}
+
 if (!API_URL) {
   throw new Error(
     "NEXT_PUBLIC_API_URL is not defined. Set it in Vercel Environment Variables."
@@ -18,6 +25,12 @@ if (!API_URL) {
 
 // Remove trailing slash if present
 const normalizedApiUrl = API_URL.replace(/\/$/, "");
+
+// Debug final URL
+if (typeof window !== "undefined") {
+  console.log("  Final baseURL:", normalizedApiUrl);
+  console.log("  Protocol:", normalizedApiUrl.startsWith("https://") ? "✅ HTTPS" : "❌ HTTP");
+}
 
 const api = axios.create({
   baseURL: normalizedApiUrl,
